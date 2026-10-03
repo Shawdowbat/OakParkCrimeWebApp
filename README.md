@@ -1,3 +1,5 @@
+Team Names: Luke Leibundguth, Andrew Stierwalt, Alex Dysico
+
 # Oak Park Safe Routes
 
 **Helping Oak Park parents find safer ways for their kids to get where they're going.**
