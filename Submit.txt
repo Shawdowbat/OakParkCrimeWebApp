@@ -1,0 +1,49 @@
+## What I built
+
+**Oak Park Safe Routes** is a web app that works on phones. It has two parts that share the same data:
+
+1. **A crime map.** Every street block in Oak Park is colored on a gradient from green (no or minor incidents) through orange to red (more serious or frequent incidents). A time-frame slider limits the map to the last 1–10 years, and other filters narrow it by crime type. Tapping a block shows what was reported there.
+2. **A safe route planner.** A parent enters a start and a destination by typing an address, picking a school from the list, using their phone's location, or tapping the map. The app returns two walking routes drawn in purple, with:
+   - walking and biking times at a child's pace
+   - how many high-crime blocks each route passes and how far it runs along busy streets
+   - turn-by-turn directions, with ⚠ warnings on risky steps
+
+It's built with Flask and Leaflet. It can be installed on a phone's home screen, compresses its data for cellular connections, and is ready to deploy with waitress, Docker or a Procfile-based host.
+
+## What it solves for
+
+Parents in Oak Park want to know how their kids can get to school, the park or the library safely. Map apps optimize for the fastest route, which often means Harlem Ave, Madison St or Lake St: busy streets that also have some of the highest crime. Raw crime data doesn't help either: a spreadsheet of 13,500 incidents tells a parent nothing about which way to walk.
+
+The app turns that data into one practical answer: **"This is the safest reasonable way for your child to walk there, how long it takes, and where to be careful."** It weighs three things a parent cares about: avoiding crime, avoiding heavy traffic, and keeping the route simple enough for a child to remember.
+
+## How I got from the raw data to the result
+
+**1. Cleaning the incidents.** The CSV has one row per charge, so a single incident with three charges appeared three times. I collapsed rows by incident ID, which gave about 13,500 incidents across 20 crime types, dated January 2022 to September 2026. Locations are block-level ("800 Block N Cuyler Ave"), so many incidents share a point; there were 989 distinct locations.
+
+**2. Weighting by severity.** A count treats a shoplifting like an assault, so I gave each crime type a weight for how dangerous it is to be around. Theft and fraud are 1, assault is 6, drugs 8, robbery 12, sex offenses and kidnapping 20, and homicide 25. An incident with several charges counts at its most serious one.
+
+**3. Scoring each block.** A block's danger score is the sum of its incident weights per year. Measuring per year makes a 1-year view and a 5-year view comparable. I set the thresholds after looking at the actual distribution: under 5 points a year is low, 5–15 is moderate, and 15+ is high. That splits blocks roughly 60% / 27% / 14%.
+
+**4. Turning points into streets.** To draw blocks as street segments instead of dots, I needed real street geometry.
+- I downloaded Oak Park's street network from OpenStreetMap and split it into blocks at every intersection, giving about 2,000 segments, each tagged with its road class.
+- I matched each crime address to its street block. Names had to be normalized first: "N Oak Park Ave" has to match "North Oak Park Avenue", and "Le Moyne" has to match "Lemoyne". Each address then attaches to the nearest block on the same-named street.
+- **96% of incidents landed on a street block**, usually within 1–2 meters. The rest were at intersections and stay as dots.
+
+**5. Coloring the map.** Scores run from 0 to over 200, so the green-to-red gradient uses a log scale; otherwise a few extreme blocks would squash everything else into green. Every block in the village is drawn green first, then blocks with incidents are colored on top.
+
+**6. Building the router.** The street blocks became a walking graph. Each block's cost is its length, increased for:
+- crime on that block
+- traffic: Harlem and North Ave count about 4 times their length, Madison and Lake about 3 times
+- intersections with reported incidents
+- each change of street, so routes don't zig-zag
+
+A shortest-path search finds the lowest-cost route. A second search penalizes reusing the first route's blocks to find a different alternative. The two are then ranked by total risk, so the one labeled "Safest" really is safer.
+
+**7. Testing against real trips and fixing what I found.** Running routes between actual schools exposed problems a formula alone wouldn't:
+- **Routes left Oak Park.** An early "safest" route went into Chicago's Austin neighborhood. Streets outside the village looked crime-free only because the data stops at the village limits, so I limited routing to Oak Park.
+- **The "Safest" label was sometimes wrong.** The route labeled safest could pass more high-crime blocks than the alternative. I added the final ranking by total risk to fix it.
+- **Routes zig-zagged.** Stronger crime weighting made routes turn block by block, which a child couldn't follow. The turn penalty fixed that.
+
+**8. Keeping everything consistent.** The time-frame slider recalculates block scores for both the map colors and the router, so a route always matches the colors the parent sees.
+
+One caveat that applies throughout: everything rests on *reported* incidents. The app is a planning aid for parents, not a guarantee of safety, and both the app and the README say so.
