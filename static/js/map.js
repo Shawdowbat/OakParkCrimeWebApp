@@ -4,12 +4,41 @@ const OAK_PARK_BOUNDS = [[41.865, -87.806], [41.9093, -87.7742]];
 const MIN_RADIUS = 5;
 const MAX_RADIUS = 22;
 
+// ---------------------------------------------------------------------------
+// PASTE YOUR MAP API KEY BETWEEN THE QUOTES BELOW.
+// Get a free key at https://cloud.maptiler.com/account/keys/ (sign up, then
+// copy the default key). Left empty, the map falls back to keyless CARTO
+// tiles, which are fine for light/demo use.
+// ---------------------------------------------------------------------------
+const MAP_API_KEY = "";
+
 const TILE_URLS = {
   light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
   dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
 };
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+const MAPTILER_URLS = {
+  light: "https://api.maptiler.com/maps/dataviz/{z}/{x}/{y}{r}.png?key={key}",
+  dark: "https://api.maptiler.com/maps/dataviz-dark/{z}/{x}/{y}{r}.png?key={key}",
+};
+const MAPTILER_ATTRIBUTION =
+  '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+function tileConfig() {
+  const theme = darkQuery.matches ? "dark" : "light";
+  if (MAP_API_KEY) {
+    return {
+      url: MAPTILER_URLS[theme],
+      options: { attribution: MAPTILER_ATTRIBUTION, key: MAP_API_KEY, maxZoom: 19 },
+    };
+  }
+  return {
+    url: TILE_URLS[theme],
+    options: { attribution: TILE_ATTRIBUTION, subdomains: "abcd", maxZoom: 19 },
+  };
+}
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -48,11 +77,8 @@ class CrimeMap {
 
   applyTheme() {
     if (this.tiles) this.tiles.remove();
-    this.tiles = L.tileLayer(darkQuery.matches ? TILE_URLS.dark : TILE_URLS.light, {
-      attribution: TILE_ATTRIBUTION,
-      subdomains: "abcd",
-      maxZoom: 19,
-    }).addTo(this.map);
+    const { url, options } = tileConfig();
+    this.tiles = L.tileLayer(url, options).addTo(this.map);
   }
 
   setLoading(loading) {
