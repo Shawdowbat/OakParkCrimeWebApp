@@ -71,4 +71,6 @@ def incidents():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # Listen on all interfaces so other devices on the LAN can connect. The
+    # interactive debugger stays off since it allows remote code execution.
+    app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False)
