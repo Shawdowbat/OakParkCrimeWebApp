@@ -1,8 +1,19 @@
-// Leaflet map with one dot per block, area proportional to incident count.
+// Leaflet map drawing each block as its stretch of street (or a dot where no
+// street matched). Line width tracks incident count; color tracks danger score.
 
 const OAK_PARK_BOUNDS = [[41.865, -87.806], [41.9093, -87.7742]];
-const MIN_RADIUS = 5;
-const MAX_RADIUS = 22;
+const MIN_WIDTH = 2.5;
+const MAX_WIDTH = 10;
+
+// Danger score (points/yr) to color: green, through orange, to red. Hue, saturation
+// and lightness are interpolated between stops on a log scale, since scores
+// run from under 1 to over 200.
+const DANGER_STOPS = [
+  { score: 0, h: 120, s: 86, l: 34 },
+  { score: 8, h: 30, s: 92, l: 52 },
+  { score: 40, h: 0, s: 61, l: 52 },
+];
+const DANGER_TICKS = [0, 5, 15, 40];
 
 // ---------------------------------------------------------------------------
 // CARTO basemap API key (from https://clausa.app.carto.com/ > Developers >
@@ -99,9 +110,37 @@ function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-// Area, not radius, tracks the count so big blocks don't visually overstate.
-function radiusScale(maxCount) {
-  return (count) => Math.max(MIN_RADIUS, MAX_RADIUS * Math.sqrt(count / Math.max(maxCount, 1)));
+// Square root so the busiest blocks don't drown out the rest.
+function widthScale(maxCount) {
+  return (count) => MIN_WIDTH + (MAX_WIDTH - MIN_WIDTH) * Math.sqrt((count - 1) / Math.max(maxCount - 1, 1));
+}
+
+function dangerPosition(score) {
+  const max = DANGER_STOPS[DANGER_STOPS.length - 1].score;
+  return Math.log1p(Math.min(Math.max(score, 0), max)) / Math.log1p(max);
+}
+
+function dangerColor(score) {
+  const t = dangerPosition(score);
+  let i = 1;
+  while (i < DANGER_STOPS.length - 1 && t > dangerPosition(DANGER_STOPS[i].score)) i++;
+  const a = DANGER_STOPS[i - 1];
+  const b = DANGER_STOPS[i];
+  const ta = dangerPosition(a.score);
+  const f = Math.min(Math.max((t - ta) / (dangerPosition(b.score) - ta), 0), 1);
+  const mix = (key) => a[key] + (b[key] - a[key]) * f;
+  return `hsl(${mix("h").toFixed(1)}, ${mix("s").toFixed(1)}%, ${mix("l").toFixed(1)}%)`;
+}
+
+function dangerGradientCss() {
+  const steps = 12;
+  const max = DANGER_STOPS[DANGER_STOPS.length - 1].score;
+  const colors = [];
+  for (let k = 0; k <= steps; k++) {
+    const score = Math.expm1((k / steps) * Math.log1p(max));
+    colors.push(`${dangerColor(score)} ${((k / steps) * 100).toFixed(1)}%`);
+  }
+  return `linear-gradient(to right, ${colors.join(", ")})`;
 }
 
 function niceRound(n) {
@@ -119,6 +158,7 @@ class CrimeMap {
     this.map.fitBounds(OAK_PARK_BOUNDS);
     // Landmarks sit above the incident dots (overlay pane, 400) but below popups.
     this.map.createPane("landmarks").style.zIndex = 450;
+    this.casings = L.layerGroup().addTo(this.map);
     this.dots = L.layerGroup().addTo(this.map);
     this.lastData = null;
 
@@ -164,72 +204,123 @@ class CrimeMap {
 
   render(geojson) {
     this.lastData = geojson;
+    this.casings.clearLayers();
     this.dots.clearLayers();
 
     const features = geojson.features;
     const maxCount = features.length ? features[0].properties.count : 1;
-    const radius = radiusScale(maxCount);
-    const fill = cssVar("--series-1");
+    const width = widthScale(maxCount);
     const ring = cssVar("--surface-1");
+    const levels = levelsByKey(geojson.danger_levels);
 
-    // Features arrive busiest first, so small dots are drawn on top and stay hoverable.
+    // Features arrive busiest first, so thin lines are drawn on top and stay hoverable.
+    // Every casing sits in a layer below every line so casings never cut across
+    // a neighboring block at an intersection.
     for (const feature of features) {
-      const [lon, lat] = feature.geometry.coordinates;
       const props = feature.properties;
-      const dot = L.circleMarker([lat, lon], {
-        radius: radius(props.count),
-        color: ring,
-        weight: 2,
-        fillColor: fill,
-        fillOpacity: 0.6,
+      const color = dangerColor(props.danger_score);
+      const w = width(props.count);
+      let mark;
+      if (feature.geometry.type === "LineString") {
+        const latlngs = feature.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+        this.casings.addLayer(
+          L.polyline(latlngs, { color: ring, weight: w + 3, opacity: 0.85, interactive: false }),
+        );
+        mark = L.polyline(latlngs, { color, weight: w, opacity: 0.95 });
+        mark.on("mouseover", () => mark.setStyle({ weight: w + 3 }));
+        mark.on("mouseout", () => mark.setStyle({ weight: w }));
+      } else {
+        const [lon, lat] = feature.geometry.coordinates;
+        mark = L.circleMarker([lat, lon], {
+          radius: w / 2 + 3,
+          color: ring,
+          weight: 2,
+          fillColor: color,
+          fillOpacity: 0.95,
+        });
+        mark.on("mouseover", () => mark.setStyle({ weight: 4 }));
+        mark.on("mouseout", () => mark.setStyle({ weight: 2 }));
+      }
+      mark.bindTooltip(() => buildTooltip(props, levels), {
+        direction: "top",
+        sticky: true,
+        offset: [0, -8],
+        className: "dot-tooltip",
       });
-      dot.bindTooltip(() => buildTooltip(props), { direction: "top", className: "dot-tooltip" });
-      dot.on("mouseover", () => dot.setStyle({ fillOpacity: 0.95 }));
-      dot.on("mouseout", () => dot.setStyle({ fillOpacity: 0.6 }));
-      this.dots.addLayer(dot);
+      this.dots.addLayer(mark);
     }
 
-    this.renderLegend(maxCount, radius, fill, ring);
+    this.renderLegend(maxCount, width);
   }
 
-  renderLegend(maxCount, radius, fill, ring) {
+  renderLegend(maxCount, width) {
     this.legendEl.replaceChildren();
     if (!this.lastData.features.length) return;
 
-    const values = [...new Set([1, niceRound(maxCount / 4), maxCount])].filter((v) => v <= maxCount);
-    const title = document.createElement("span");
-    title.className = "legend-title";
-    title.textContent = "Incidents per block";
-    this.legendEl.appendChild(title);
+    const colorGroup = legendGroup("Danger (pts/yr)");
+    const scale = document.createElement("div");
+    scale.className = "legend-gradient";
+    scale.setAttribute("role", "img");
+    scale.setAttribute("aria-label", "Color scale from green (safer) through orange to red (more dangerous)");
+    const bar = document.createElement("div");
+    bar.className = "legend-gradient-bar";
+    bar.style.background = dangerGradientCss();
+    const ticks = document.createElement("div");
+    ticks.className = "legend-gradient-ticks";
+    DANGER_TICKS.forEach((value, index) => {
+      const tick = document.createElement("span");
+      tick.style.left = `${dangerPosition(value) * 100}%`;
+      tick.textContent = index === DANGER_TICKS.length - 1 ? `${value}+` : String(value);
+      ticks.appendChild(tick);
+    });
+    scale.append(bar, ticks);
+    colorGroup.appendChild(scale);
 
+    const sizeGroup = legendGroup("Incidents per block");
+    const sizeColor = cssVar("--text-muted");
+    const values = [...new Set([1, niceRound(maxCount / 4), maxCount])].filter((v) => v <= maxCount);
     const svgNs = "http://www.w3.org/2000/svg";
     for (const value of values) {
-      const r = radius(value);
       const item = document.createElement("span");
       item.className = "legend-item";
       const svg = document.createElementNS(svgNs, "svg");
-      const size = MAX_RADIUS * 2 + 4;
-      svg.setAttribute("width", size);
-      svg.setAttribute("height", size);
+      svg.setAttribute("width", 30);
+      svg.setAttribute("height", MAX_WIDTH + 4);
       svg.setAttribute("aria-hidden", "true");
-      const circle = document.createElementNS(svgNs, "circle");
-      circle.setAttribute("cx", size / 2);
-      circle.setAttribute("cy", size / 2);
-      circle.setAttribute("r", r);
-      circle.setAttribute("fill", fill);
-      circle.setAttribute("fill-opacity", "0.6");
-      circle.setAttribute("stroke", ring);
-      circle.setAttribute("stroke-width", "2");
-      svg.appendChild(circle);
+      const line = document.createElementNS(svgNs, "line");
+      line.setAttribute("x1", 6);
+      line.setAttribute("x2", 24);
+      line.setAttribute("y1", (MAX_WIDTH + 4) / 2);
+      line.setAttribute("y2", (MAX_WIDTH + 4) / 2);
+      line.setAttribute("stroke", sizeColor);
+      line.setAttribute("stroke-width", width(value));
+      line.setAttribute("stroke-linecap", "round");
+      svg.appendChild(line);
       const label = document.createElement("span");
       label.textContent = value.toLocaleString();
       item.append(svg, label);
-      this.legendEl.appendChild(item);
+      sizeGroup.appendChild(item);
     }
+
+    this.legendEl.append(colorGroup, sizeGroup);
   }
 }
 
-function buildTooltip(props) {
+function legendGroup(titleText) {
+  const group = document.createElement("div");
+  group.className = "legend-group";
+  const title = document.createElement("span");
+  title.className = "legend-title";
+  title.textContent = titleText;
+  group.appendChild(title);
+  return group;
+}
+
+function levelsByKey(levels) {
+  return Object.fromEntries(levels.map((level) => [level.key, level]));
+}
+
+function buildTooltip(props, levels) {
   const root = document.createElement("div");
 
   const count = document.createElement("div");
@@ -239,6 +330,15 @@ function buildTooltip(props) {
   const place = document.createElement("div");
   place.className = "tt-label";
   place.textContent = `${props.location} · ${props.zone}`;
+
+  const danger = document.createElement("div");
+  danger.className = "tt-danger";
+  const swatch = document.createElement("span");
+  swatch.className = "legend-swatch";
+  swatch.style.background = dangerColor(props.danger_score);
+  const dangerText = document.createElement("span");
+  dangerText.textContent = `${levels[props.danger_level].label} danger · ${props.danger_score.toLocaleString()} pts/yr`;
+  danger.append(swatch, dangerText);
 
   const list = document.createElement("ul");
   list.className = "tt-types";
@@ -257,7 +357,7 @@ function buildTooltip(props) {
   latest.className = "tt-label";
   latest.textContent = `Most recent: ${formatDate(props.latest_date)}`;
 
-  root.append(count, place, list, latest);
+  root.append(count, place, danger, list, latest);
   return root;
 }
 

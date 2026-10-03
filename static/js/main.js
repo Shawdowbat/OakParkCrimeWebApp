@@ -93,19 +93,21 @@ function renderTable(geojson) {
   if (!top.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 5;
+    cell.colSpan = 6;
     cell.className = "empty";
     cell.textContent = "No incidents match the current filters.";
     row.appendChild(cell);
     els.tableBody.appendChild(row);
     return;
   }
+  const levels = levelsByKey(geojson.danger_levels);
   for (const { properties: p } of top) {
     const row = document.createElement("tr");
     const cells = [
       [p.location, ""],
       [p.zone, ""],
       [p.count.toLocaleString(), "num"],
+      [`${levels[p.danger_level].label} (${p.danger_score.toLocaleString()})`, ""],
       [p.top_types[0][0], ""],
       [formatDate(p.latest_date), ""],
     ];
@@ -115,6 +117,10 @@ function renderTable(geojson) {
       if (cls) td.className = cls;
       row.appendChild(td);
     }
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.background = dangerColor(p.danger_score);
+    row.children[3].prepend(swatch);
     els.tableBody.appendChild(row);
   }
 }

@@ -70,7 +70,7 @@
       <div class="card-header">
         <div>
           <h2 id="map-title">Incidents by block</h2>
-          <p class="card-subtitle">Each dot is a block. Dot size shows how many incidents were reported there. Hover a dot for details. Use the layer menu to switch map styles and toggle landmarks.</p>
+          <p class="card-subtitle">Each line is one block of street. Line width shows how many incidents were reported there; color runs from green (safer) through orange to red (more dangerous), weighting each incident by how serious it is (a robbery counts 12 times a theft). Dots mark incidents at intersections. Hover for details. Use the layer menu to switch map styles and toggle landmarks.</p>
         </div>
         <div id="map-legend" aria-label="Dot size legend"></div>
       </div>
@@ -91,6 +91,7 @@
               <th>Block</th>
               <th>Zone</th>
               <th class="num">Incidents</th>
+              <th>Danger (pts/yr)</th>
               <th>Most common type</th>
               <th>Latest</th>
             </tr>

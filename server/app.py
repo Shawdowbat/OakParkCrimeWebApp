@@ -49,8 +49,11 @@ def options():
 
 @app.route("/api/map-points")
 def map_points():
-    """GeoJSON with one point per block, carrying its incident count."""
-    return jsonify(analysis.aggregate_locations(filtered_incidents()))
+    """GeoJSON with one point per block, carrying its incident count and danger level."""
+    years = analysis.window_years(
+        analysis.load_incidents(), start=request.args.get("start"), end=request.args.get("end")
+    )
+    return jsonify(analysis.aggregate_locations(filtered_incidents(), years=years))
 
 
 @app.route("/api/summary")
