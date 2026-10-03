@@ -8,19 +8,29 @@ async function fetchJson(url) {
   return res.json();
 }
 
-function fetchIncidents({ type = "", start = "", end = "", limit = 500 } = {}) {
+function filterParams({ type = "", crimeAgainst = "", start = "", end = "" } = {}) {
   const params = new URLSearchParams();
   if (type) params.set("type", type);
+  if (crimeAgainst) params.set("crime_against", crimeAgainst);
   if (start) params.set("start", start);
   if (end) params.set("end", end);
+  return params;
+}
+
+function fetchOptions() {
+  return fetchJson("/api/options");
+}
+
+function fetchMapPoints(filters) {
+  return fetchJson(`/api/map-points?${filterParams(filters)}`);
+}
+
+function fetchSummary(filters) {
+  return fetchJson(`/api/summary?${filterParams(filters)}`);
+}
+
+function fetchIncidents(filters, limit = 500) {
+  const params = filterParams(filters);
   params.set("limit", limit);
   return fetchJson(`/api/incidents?${params}`);
-}
-
-function fetchIncidentTypes() {
-  return fetchJson("/api/incident-types");
-}
-
-function fetchStats() {
-  return fetchJson("/api/stats");
 }
