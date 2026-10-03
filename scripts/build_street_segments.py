@@ -51,14 +51,27 @@ def split_at_intersections(ways):
     pieces = []
     for way in ways:
         name = way["tags"]["name"]
+        highway = way["tags"]["highway"]
         nodes = way["nodes"]
         coords = [(round(p["lon"], 6), round(p["lat"], 6)) for p in way["geometry"]]
         start = 0
         for i in range(1, len(nodes)):
             if nodes[i] in intersections or i == len(nodes) - 1:
-                pieces.append({"name": name, "nodes": nodes[start:i + 1], "coords": coords[start:i + 1]})
+                pieces.append({
+                    "name": name, "highway": highway,
+                    "nodes": nodes[start:i + 1], "coords": coords[start:i + 1],
+                })
                 start = i
     return pieces, intersections
+
+
+# Busiest first; a block merged from pieces of mixed class keeps the busier one.
+HIGHWAY_RANK = ["trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "living_street", "service"]
+
+
+def busier(a, b):
+    rank = {h: i for i, h in enumerate(HIGHWAY_RANK)}
+    return a if rank.get(a, len(rank)) <= rank.get(b, len(rank)) else b
 
 
 def merge_mid_block_splits(pieces, intersections):
@@ -85,7 +98,12 @@ def merge_mid_block_splits(pieces, intersections):
                     a = {**a, "nodes": a["nodes"][::-1], "coords": a["coords"][::-1]}
                 if b["nodes"][0] != node:
                     b = {**b, "nodes": b["nodes"][::-1], "coords": b["coords"][::-1]}
-                group[idxs[0]] = {"name": name, "nodes": a["nodes"] + b["nodes"][1:], "coords": a["coords"] + b["coords"][1:]}
+                group[idxs[0]] = {
+                    "name": name,
+                    "highway": busier(a["highway"], b["highway"]),
+                    "nodes": a["nodes"] + b["nodes"][1:],
+                    "coords": a["coords"] + b["coords"][1:],
+                }
                 alive.discard(idxs[1])
                 changed = True
                 break
@@ -107,7 +125,7 @@ def main():
             "type": "Feature",
             "id": i,
             "geometry": {"type": "LineString", "coordinates": seg["coords"]},
-            "properties": {"name": seg["name"]},
+            "properties": {"name": seg["name"], "highway": seg["highway"]},
         }
         for i, seg in enumerate(segments)
         if len(seg["coords"]) >= 2

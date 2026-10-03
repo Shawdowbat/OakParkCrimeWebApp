@@ -1,9 +1,10 @@
-// Leaflet map drawing each block as its stretch of street (or a dot where no
-// street matched). Line width tracks incident count; color tracks danger score.
+// Leaflet map coloring every street block in Oak Park by danger score: blocks
+// with no incidents are green, the rest run through orange to red. Incidents at
+// intersections (or on streets missing from the street data) are dots.
 
 const OAK_PARK_BOUNDS = [[41.865, -87.806], [41.9093, -87.7742]];
-const MIN_WIDTH = 2.5;
-const MAX_WIDTH = 10;
+const LINE_WIDTH = 4;
+const DOT_RADIUS = 5;
 
 // Danger score (points/yr) to color: green, through orange, to red. Hue, saturation
 // and lightness are interpolated between stops on a log scale, since scores
@@ -25,8 +26,12 @@ const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright
 const CARTO_ATTRIBUTION = `${OSM_ATTRIBUTION} &copy; <a href="https://carto.com/attributions">CARTO</a>`;
 const ESRI_ATTRIBUTION = "Imagery &copy; Esri, Maxar, Earthstar Geographics";
 
-const LIGHT_BASEMAP = "Detailed streets";
+// Voyager is the default because it's CARTO's keyed, production tile service.
+// OpenStreetMap's own tile servers ("Detailed streets") are donated and their
+// usage policy discourages heavy app traffic, so they're offered but not default.
+const LIGHT_BASEMAP = "Voyager";
 const DARK_BASEMAP = "Dark";
+const IS_TOUCH = window.matchMedia("(hover: none), (pointer: coarse)").matches;
 
 function cartoLayer(style) {
   const url = MAP_API_KEY
@@ -39,11 +44,11 @@ function cartoLayer(style) {
 // parks, shops and schools are all drawn in color once zoomed in.
 function buildBasemaps() {
   return {
-    [LIGHT_BASEMAP]: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    [LIGHT_BASEMAP]: cartoLayer("voyager"),
+    "Detailed streets": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: OSM_ATTRIBUTION,
       maxZoom: 19,
     }),
-    Voyager: cartoLayer("voyager"),
     Satellite: L.layerGroup([
       L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
         attribution: ESRI_ATTRIBUTION,
@@ -81,11 +86,14 @@ const MapButtons = L.Control.extend({
   onAdd(map) {
     const bar = L.DomUtil.create("div", "leaflet-bar map-buttons");
     this.addButton(bar, "⌂", "Reset view to all of Oak Park", () => map.fitBounds(OAK_PARK_BOUNDS));
-    this.addButton(bar, "⛶", "Toggle full screen", () => {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else map.getContainer().requestFullscreen();
-    });
-    document.addEventListener("fullscreenchange", () => map.invalidateSize());
+    // iPhone Safari has no element full screen; leave the button out there.
+    if (document.fullscreenEnabled) {
+      this.addButton(bar, "⛶", "Toggle full screen", () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else map.getContainer().requestFullscreen().catch(() => {});
+      });
+      document.addEventListener("fullscreenchange", () => map.invalidateSize());
+    }
     L.DomEvent.disableClickPropagation(bar);
     return bar;
   },
@@ -108,11 +116,6 @@ const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
-// Square root so the busiest blocks don't drown out the rest.
-function widthScale(maxCount) {
-  return (count) => MIN_WIDTH + (MAX_WIDTH - MIN_WIDTH) * Math.sqrt((count - 1) / Math.max(maxCount - 1, 1));
 }
 
 function dangerPosition(score) {
@@ -143,24 +146,24 @@ function dangerGradientCss() {
   return `linear-gradient(to right, ${colors.join(", ")})`;
 }
 
-function niceRound(n) {
-  if (n <= 10) return Math.max(1, Math.round(n));
-  const magnitude = 10 ** Math.floor(Math.log10(n));
-  return Math.round(n / magnitude) * magnitude;
-}
-
 class CrimeMap {
   constructor(elementId, legendId) {
     this.legendEl = document.getElementById(legendId);
-    // Canvas tolerance widens each dot's hit area beyond its painted pixels.
-    this.renderer = L.canvas({ tolerance: 8 });
+    // Canvas tolerance widens each line's hit area beyond its painted pixels;
+    // fingers need more room than a mouse pointer.
+    this.renderer = L.canvas({ tolerance: IS_TOUCH ? 14 : 8 });
     this.map = L.map(elementId, { renderer: this.renderer, scrollWheelZoom: true, maxZoom: 19 });
     this.map.fitBounds(OAK_PARK_BOUNDS);
     // Landmarks sit above the incident dots (overlay pane, 400) but below popups.
     this.map.createPane("landmarks").style.zIndex = 450;
+    // Every outline sits below every colored line so an outline never cuts
+    // across a neighboring block where streets meet.
+    this.streetCasings = L.layerGroup().addTo(this.map);
     this.casings = L.layerGroup().addTo(this.map);
+    this.streets = L.layerGroup().addTo(this.map);
     this.dots = L.layerGroup().addTo(this.map);
     this.lastData = null;
+    this.loadStreets().catch((err) => console.error("Street layer failed to load", err));
 
     this.basemaps = buildBasemaps();
     this.base = null;
@@ -175,7 +178,7 @@ class CrimeMap {
     const landmarks = buildLandmarkOverlays();
     for (const layer of Object.values(landmarks)) layer.addTo(this.map);
     L.control
-      .layers(this.basemaps, landmarks, { collapsed: window.innerWidth < 700 })
+      .layers(this.basemaps, landmarks, { collapsed: IS_TOUCH || window.innerWidth < 900 })
       .addTo(this.map);
     L.control.scale({ metric: false }).addTo(this.map);
     new MapButtons().addTo(this.map);
@@ -202,60 +205,62 @@ class CrimeMap {
     this.map.getContainer().classList.toggle("is-loading", loading);
   }
 
+  // Draws every street in the village green once; blocks with incidents are
+  // drawn over their green line by render().
+  async loadStreets() {
+    const streets = await fetchStreets();
+    const color = dangerColor(0);
+    for (const feature of streets.features) {
+      const latlngs = feature.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+      this.streetCasings.addLayer(L.polyline(latlngs, this.casingStyle()));
+      const line = L.polyline(latlngs, { color, weight: LINE_WIDTH, opacity: 0.95 });
+      line.bindTooltip(() => buildQuietStreetTooltip(feature.properties.name), TOOLTIP_OPTIONS);
+      this.streets.addLayer(line);
+    }
+  }
+
+  casingStyle() {
+    return { color: cssVar("--surface-1"), weight: LINE_WIDTH + 3, opacity: 0.85, interactive: false };
+  }
+
   render(geojson) {
     this.lastData = geojson;
     this.casings.clearLayers();
     this.dots.clearLayers();
+    this.streetCasings.eachLayer((casing) => casing.setStyle(this.casingStyle()));
 
-    const features = geojson.features;
-    const maxCount = features.length ? features[0].properties.count : 1;
-    const width = widthScale(maxCount);
     const ring = cssVar("--surface-1");
     const levels = levelsByKey(geojson.danger_levels);
 
-    // Features arrive busiest first, so thin lines are drawn on top and stay hoverable.
-    // Every casing sits in a layer below every line so casings never cut across
-    // a neighboring block at an intersection.
-    for (const feature of features) {
+    // Most dangerous last, so red blocks sit on top where streets meet.
+    const ordered = [...geojson.features].sort((a, b) => a.properties.danger_score - b.properties.danger_score);
+    for (const feature of ordered) {
       const props = feature.properties;
       const color = dangerColor(props.danger_score);
-      const w = width(props.count);
       let mark;
       if (feature.geometry.type === "LineString") {
         const latlngs = feature.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
-        this.casings.addLayer(
-          L.polyline(latlngs, { color: ring, weight: w + 3, opacity: 0.85, interactive: false }),
-        );
-        mark = L.polyline(latlngs, { color, weight: w, opacity: 0.95 });
-        mark.on("mouseover", () => mark.setStyle({ weight: w + 3 }));
-        mark.on("mouseout", () => mark.setStyle({ weight: w }));
+        this.casings.addLayer(L.polyline(latlngs, this.casingStyle()));
+        mark = L.polyline(latlngs, { color, weight: LINE_WIDTH, opacity: 0.95 });
       } else {
         const [lon, lat] = feature.geometry.coordinates;
         mark = L.circleMarker([lat, lon], {
-          radius: w / 2 + 3,
+          radius: DOT_RADIUS,
           color: ring,
           weight: 2,
           fillColor: color,
           fillOpacity: 0.95,
         });
-        mark.on("mouseover", () => mark.setStyle({ weight: 4 }));
-        mark.on("mouseout", () => mark.setStyle({ weight: 2 }));
       }
-      mark.bindTooltip(() => buildTooltip(props, levels), {
-        direction: "top",
-        sticky: true,
-        offset: [0, -8],
-        className: "dot-tooltip",
-      });
+      mark.bindTooltip(() => buildTooltip(props, levels), TOOLTIP_OPTIONS);
       this.dots.addLayer(mark);
     }
 
-    this.renderLegend(maxCount, width);
+    this.renderLegend();
   }
 
-  renderLegend(maxCount, width) {
+  renderLegend() {
     this.legendEl.replaceChildren();
-    if (!this.lastData.features.length) return;
 
     const colorGroup = legendGroup("Danger (pts/yr)");
     const scale = document.createElement("div");
@@ -276,34 +281,28 @@ class CrimeMap {
     scale.append(bar, ticks);
     colorGroup.appendChild(scale);
 
-    const sizeGroup = legendGroup("Incidents per block");
-    const sizeColor = cssVar("--text-muted");
-    const values = [...new Set([1, niceRound(maxCount / 4), maxCount])].filter((v) => v <= maxCount);
-    const svgNs = "http://www.w3.org/2000/svg";
-    for (const value of values) {
-      const item = document.createElement("span");
-      item.className = "legend-item";
-      const svg = document.createElementNS(svgNs, "svg");
-      svg.setAttribute("width", 30);
-      svg.setAttribute("height", MAX_WIDTH + 4);
-      svg.setAttribute("aria-hidden", "true");
-      const line = document.createElementNS(svgNs, "line");
-      line.setAttribute("x1", 6);
-      line.setAttribute("x2", 24);
-      line.setAttribute("y1", (MAX_WIDTH + 4) / 2);
-      line.setAttribute("y2", (MAX_WIDTH + 4) / 2);
-      line.setAttribute("stroke", sizeColor);
-      line.setAttribute("stroke-width", width(value));
-      line.setAttribute("stroke-linecap", "round");
-      svg.appendChild(line);
-      const label = document.createElement("span");
-      label.textContent = value.toLocaleString();
-      item.append(svg, label);
-      sizeGroup.appendChild(item);
-    }
+    const note = document.createElement("span");
+    note.className = "legend-note";
+    note.textContent = `Green streets had no incidents for these filters; dots are incidents at intersections. ${
+      IS_TOUCH ? "Tap" : "Hover over"
+    } a street for details.`;
 
-    this.legendEl.append(colorGroup, sizeGroup);
+    this.legendEl.append(colorGroup, note);
   }
+}
+
+const TOOLTIP_OPTIONS = { direction: "top", sticky: true, offset: [0, -8], className: "dot-tooltip" };
+
+function buildQuietStreetTooltip(name) {
+  const root = document.createElement("div");
+  const value = document.createElement("div");
+  value.className = "tt-value";
+  value.textContent = "No incidents";
+  const label = document.createElement("div");
+  label.className = "tt-label";
+  label.textContent = `${name} · none match the current filters`;
+  root.append(value, label);
+  return root;
 }
 
 function legendGroup(titleText) {

@@ -3,9 +3,31 @@
 async function fetchJson(url) {
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error(`Request failed: ${res.status} ${res.statusText}`);
+    let message = `Request failed: ${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body.error) message = body.error;
+    } catch (err) {
+      // Not JSON; keep the status message.
+    }
+    throw new Error(message);
   }
   return res.json();
+}
+
+function fetchRoutes(from, to, { start = "", end = "" } = {}) {
+  const params = new URLSearchParams({ from: `${from.lat},${from.lon}`, to: `${to.lat},${to.lon}` });
+  if (start) params.set("start", start);
+  if (end) params.set("end", end);
+  return fetchJson(`/api/route?${params}`);
+}
+
+function geocodePlace(query) {
+  return fetchJson(`/api/geocode?${new URLSearchParams({ q: query })}`);
+}
+
+function reverseGeocode(lat, lon) {
+  return fetchJson(`/api/reverse?${new URLSearchParams({ lat, lon })}`);
 }
 
 function filterParams({ type = "", crimeAgainst = "", start = "", end = "" } = {}) {
@@ -23,6 +45,10 @@ function fetchOptions() {
 
 function fetchMapPoints(filters) {
   return fetchJson(`/api/map-points?${filterParams(filters)}`);
+}
+
+function fetchStreets() {
+  return fetchJson("/api/streets");
 }
 
 function fetchSummary(filters) {

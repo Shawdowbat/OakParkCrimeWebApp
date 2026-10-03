@@ -19,12 +19,17 @@ from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "crime-incidents-oak-park.csv"
 # Street blocks from OpenStreetMap, built by scripts/build_street_segments.py.
 STREETS_FILE = DATA_FILE.parent / "street_segments.geojson"
 # A block's point must lie this close to a same-named street to be drawn on it.
 MAX_SNAP_METERS = 60
+# Village limits as (south, west, north, east): Roosevelt Rd, Harlem Ave,
+# North Ave and Austin Blvd. The street file extends past them.
+OAK_PARK_LIMITS = (41.86532, -87.80498, 41.90912, -87.77494)
+LIMITS_TOLERANCE = 0.0003  # about 30 m, so the boundary streets themselves count
 
 # How dangerous each incident type is to be around, from 1 (minor, no threat
 # to bystanders) to 25 (gravest). The scale is steep on purpose so a single
@@ -186,16 +191,58 @@ def street_key(name):
     return "".join(words)
 
 
+class Segment(NamedTuple):
+    """One block of one street. `coords` are (lon, lat) pairs."""
+    name: str
+    id: int
+    coords: tuple
+    highway: str
+
+
 @lru_cache(maxsize=1)
-def load_street_segments(path=STREETS_FILE):
-    """Street blocks as {street_key: [(segment_id, [(lon, lat), ...]), ...]}."""
-    by_street = defaultdict(list)
+def all_segments(path=STREETS_FILE):
     if not Path(path).exists():
-        return by_street
-    for feature in json.loads(Path(path).read_text(encoding="utf-8"))["features"]:
-        coords = [tuple(c) for c in feature["geometry"]["coordinates"]]
-        by_street[street_key(feature["properties"]["name"])].append((feature["id"], coords))
+        return ()
+    return tuple(
+        Segment(
+            f["properties"]["name"],
+            f["id"],
+            tuple(tuple(c) for c in f["geometry"]["coordinates"]),
+            f["properties"].get("highway", "residential"),
+        )
+        for f in json.loads(Path(path).read_text(encoding="utf-8"))["features"]
+    )
+
+
+@lru_cache(maxsize=1)
+def load_street_segments():
+    """Street blocks as {street_key: [(segment_id, ((lon, lat), ...)), ...]}."""
+    by_street = defaultdict(list)
+    for seg in all_segments():
+        by_street[street_key(seg.name)].append((seg.id, seg.coords))
     return by_street
+
+
+def inside_oak_park(coords):
+    south, west, north, east = OAK_PARK_LIMITS
+    tol = LIMITS_TOLERANCE
+    return all(west - tol <= lon <= east + tol and south - tol <= lat <= north + tol for lon, lat in coords)
+
+
+@lru_cache(maxsize=1)
+def oak_park_streets():
+    """Every street block inside the village, as a GeoJSON FeatureCollection."""
+    features = [
+        {
+            "type": "Feature",
+            "id": seg.id,
+            "geometry": {"type": "LineString", "coordinates": [list(c) for c in seg.coords]},
+            "properties": {"name": seg.name},
+        }
+        for seg in all_segments()
+        if inside_oak_park(seg.coords)
+    ]
+    return {"type": "FeatureCollection", "features": features}
 
 
 def distance_to_line_m(lat, lon, coords):
@@ -252,6 +299,7 @@ def aggregate_locations(incidents, top_types=5, years=1.0):
         score = sum(incident_severity(i) for i in group) / per_year
         features.append({
             "type": "Feature",
+            "id": key[1] if key[0] == "street" else None,
             "geometry": geometries[key],
             "properties": {
                 "location": Counter(i.location for i in group).most_common(1)[0][0],
