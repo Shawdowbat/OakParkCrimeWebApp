@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Oak Park Crime Map</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Oak Park Crime</h1>
+    <p class="subtitle">Explore reported crime incidents in Oak Park, IL</p>
+  </header>
+
+  <section id="filters">
+    <label>
+      Incident type
+      <select id="type-filter">
+        <option value="">All types</option>
+      </select>
+    </label>
+    <label>
+      From
+      <input type="date" id="start-date">
+    </label>
+    <label>
+      To
+      <input type="date" id="end-date">
+    </label>
+    <button id="apply-filters">Apply</button>
+  </section>
+
+  <section id="summary">
+    <p><span id="incident-count">–</span> incidents match the current filters.</p>
+  </section>
+
+  <section id="results">
+    <table id="incidents-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Time</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Location</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script src="{{ url_for('static', filename='js/api.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
