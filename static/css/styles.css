@@ -175,6 +175,77 @@ main {
   opacity: 0.5;
 }
 
+#map:fullscreen {
+  height: 100%;
+  border-radius: 0;
+}
+
+/* Landmark markers: emoji on a colored disc, one color per category */
+.landmark-marker span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--landmark-color);
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.1s;
+}
+
+.landmark-marker:hover span {
+  transform: scale(1.2);
+}
+
+.tt-category {
+  font-weight: 600;
+  color: var(--landmark-color);
+}
+
+/* Map controls follow the page theme */
+.leaflet-control-layers,
+.leaflet-bar a {
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+  background: var(--page);
+  color: var(--text-primary);
+}
+
+.leaflet-control-layers {
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.leaflet-control-layers-separator {
+  border-top-color: var(--gridline);
+}
+
+.layer-icon {
+  display: inline-block;
+  width: 1.4em;
+  text-align: center;
+  margin-right: 0.15rem;
+}
+
+.map-buttons a {
+  font-size: 16px;
+}
+
+.leaflet-control-scale-line {
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
 #map-legend {
   display: flex;
   align-items: center;

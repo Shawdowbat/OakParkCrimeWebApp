@@ -5,40 +5,93 @@ const MIN_RADIUS = 5;
 const MAX_RADIUS = 22;
 
 // ---------------------------------------------------------------------------
-// PASTE YOUR MAP API KEY BETWEEN THE QUOTES BELOW.
-// Get a free key at https://cloud.maptiler.com/account/keys/ (sign up, then
-// copy the default key). Left empty, the map falls back to keyless CARTO
-// tiles, which are fine for light/demo use.
+// CARTO basemap API key (from https://clausa.app.carto.com/ > Developers >
+// API keys). Left empty, the map falls back to CARTO's keyless tiles.
 // ---------------------------------------------------------------------------
-const MAP_API_KEY = "";
+const MAP_API_KEY = "cb1_48ts_1_3bb1cf30bf0c9d89d66eaeed";
 
-const TILE_URLS = {
-  light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-  dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-};
-const TILE_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const CARTO_ATTRIBUTION = `${OSM_ATTRIBUTION} &copy; <a href="https://carto.com/attributions">CARTO</a>`;
+const ESRI_ATTRIBUTION = "Imagery &copy; Esri, Maxar, Earthstar Geographics";
 
-const MAPTILER_URLS = {
-  light: "https://api.maptiler.com/maps/dataviz/{z}/{x}/{y}{r}.png?key={key}",
-  dark: "https://api.maptiler.com/maps/dataviz-dark/{z}/{x}/{y}{r}.png?key={key}",
-};
-const MAPTILER_ATTRIBUTION =
-  '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const LIGHT_BASEMAP = "Detailed streets";
+const DARK_BASEMAP = "Dark";
 
-function tileConfig() {
-  const theme = darkQuery.matches ? "dark" : "light";
-  if (MAP_API_KEY) {
-    return {
-      url: MAPTILER_URLS[theme],
-      options: { attribution: MAPTILER_ATTRIBUTION, key: MAP_API_KEY, maxZoom: 19 },
-    };
-  }
+function cartoLayer(style) {
+  const url = MAP_API_KEY
+    ? `https://basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}.png?key=${MAP_API_KEY}`
+    : `https://{s}.basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}{r}.png`;
+  return L.tileLayer(url, { attribution: CARTO_ATTRIBUTION, subdomains: "abcd", maxZoom: 19 });
+}
+
+// "Detailed streets" is the OpenStreetMap house style: buildings, trees,
+// parks, shops and schools are all drawn in color once zoomed in.
+function buildBasemaps() {
   return {
-    url: TILE_URLS[theme],
-    options: { attribution: TILE_ATTRIBUTION, subdomains: "abcd", maxZoom: 19 },
+    [LIGHT_BASEMAP]: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: OSM_ATTRIBUTION,
+      maxZoom: 19,
+    }),
+    Voyager: cartoLayer("voyager"),
+    Satellite: L.layerGroup([
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+        attribution: ESRI_ATTRIBUTION,
+        maxZoom: 19,
+      }),
+      cartoLayer("voyager_only_labels"),
+    ]),
+    [DARK_BASEMAP]: cartoLayer("dark_all"),
   };
 }
+
+function buildLandmarkOverlays() {
+  const overlays = {};
+  for (const category of LANDMARK_CATEGORIES) {
+    const icon = L.divIcon({
+      className: "landmark-marker",
+      html: `<span style="--landmark-color: ${category.color}">${category.icon}</span>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    });
+    const markers = category.places.map((place) =>
+      L.marker([place.lat, place.lon], { icon, pane: "landmarks", alt: place.name }).bindTooltip(
+        () => buildLandmarkTooltip(category, place),
+        { direction: "top", offset: [0, -14], className: "dot-tooltip" },
+      ),
+    );
+    overlays[`<span class="layer-icon">${category.icon}</span>${category.label}`] = L.layerGroup(markers);
+  }
+  return overlays;
+}
+
+const MapButtons = L.Control.extend({
+  options: { position: "topleft" },
+
+  onAdd(map) {
+    const bar = L.DomUtil.create("div", "leaflet-bar map-buttons");
+    this.addButton(bar, "⌂", "Reset view to all of Oak Park", () => map.fitBounds(OAK_PARK_BOUNDS));
+    this.addButton(bar, "⛶", "Toggle full screen", () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else map.getContainer().requestFullscreen();
+    });
+    document.addEventListener("fullscreenchange", () => map.invalidateSize());
+    L.DomEvent.disableClickPropagation(bar);
+    return bar;
+  },
+
+  addButton(bar, text, title, onClick) {
+    const button = L.DomUtil.create("a", "", bar);
+    button.href = "#";
+    button.role = "button";
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    button.textContent = text;
+    L.DomEvent.on(button, "click", (e) => {
+      L.DomEvent.preventDefault(e);
+      onClick();
+    });
+  },
+});
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -62,23 +115,47 @@ class CrimeMap {
     this.legendEl = document.getElementById(legendId);
     // Canvas tolerance widens each dot's hit area beyond its painted pixels.
     this.renderer = L.canvas({ tolerance: 8 });
-    this.map = L.map(elementId, { renderer: this.renderer, scrollWheelZoom: true });
+    this.map = L.map(elementId, { renderer: this.renderer, scrollWheelZoom: true, maxZoom: 19 });
     this.map.fitBounds(OAK_PARK_BOUNDS);
+    // Landmarks sit above the incident dots (overlay pane, 400) but below popups.
+    this.map.createPane("landmarks").style.zIndex = 450;
     this.dots = L.layerGroup().addTo(this.map);
-    this.tiles = null;
     this.lastData = null;
 
+    this.basemaps = buildBasemaps();
+    this.base = null;
+    this.userPickedBase = false;
+    this.settingBase = false;
+    this.map.on("baselayerchange", (e) => {
+      this.base = e.layer;
+      if (!this.settingBase) this.userPickedBase = true;
+    });
     this.applyTheme();
+
+    const landmarks = buildLandmarkOverlays();
+    for (const layer of Object.values(landmarks)) layer.addTo(this.map);
+    L.control
+      .layers(this.basemaps, landmarks, { collapsed: window.innerWidth < 700 })
+      .addTo(this.map);
+    L.control.scale({ metric: false }).addTo(this.map);
+    new MapButtons().addTo(this.map);
+
     darkQuery.addEventListener("change", () => {
       this.applyTheme();
       if (this.lastData) this.render(this.lastData);
     });
   }
 
+  // Follows the OS light/dark setting until the user picks a basemap themselves.
   applyTheme() {
-    if (this.tiles) this.tiles.remove();
-    const { url, options } = tileConfig();
-    this.tiles = L.tileLayer(url, options).addTo(this.map);
+    if (this.userPickedBase) return;
+    const next = this.basemaps[darkQuery.matches ? DARK_BASEMAP : LIGHT_BASEMAP];
+    if (next === this.base) return;
+    this.settingBase = true;
+    if (this.base) this.map.removeLayer(this.base);
+    next.addTo(this.map);
+    this.base = next;
+    this.settingBase = false;
   }
 
   setLoading(loading) {
@@ -181,6 +258,28 @@ function buildTooltip(props) {
   latest.textContent = `Most recent: ${formatDate(props.latest_date)}`;
 
   root.append(count, place, list, latest);
+  return root;
+}
+
+function buildLandmarkTooltip(category, place) {
+  const root = document.createElement("div");
+
+  const name = document.createElement("div");
+  name.className = "tt-value";
+  name.textContent = place.name;
+
+  const kind = document.createElement("div");
+  kind.className = "tt-label tt-category";
+  kind.style.setProperty("--landmark-color", category.color);
+  kind.textContent = category.label;
+
+  root.append(name, kind);
+  if (place.address) {
+    const address = document.createElement("div");
+    address.className = "tt-label";
+    address.textContent = place.address;
+    root.appendChild(address);
+  }
   return root;
 }
 

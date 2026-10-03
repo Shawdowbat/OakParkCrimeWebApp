@@ -70,7 +70,7 @@
       <div class="card-header">
         <div>
           <h2 id="map-title">Incidents by block</h2>
-          <p class="card-subtitle">Each dot is a block. Dot size shows how many incidents were reported there. Hover a dot for details.</p>
+          <p class="card-subtitle">Each dot is a block. Dot size shows how many incidents were reported there. Hover a dot for details. Use the layer menu to switch map styles and toggle landmarks.</p>
         </div>
         <div id="map-legend" aria-label="Dot size legend"></div>
       </div>
@@ -104,6 +104,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="{{ url_for('static', filename='js/api.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/landmarks.js') }}"></script>
   <script src="{{ url_for('static', filename='js/map.js') }}"></script>
   <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
